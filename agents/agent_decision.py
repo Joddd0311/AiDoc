@@ -53,7 +53,8 @@ class AgentConfig:
     6. SKIN_LESION_AGENT - For analysis of skin lesion images to classify them as benign or malignant.
 
     Make your decision based on these guidelines:
-    - If the user uploads a medical image, decide which medical vision agent is appropriate based on the image type and the user's query. If the image is uploaded without a query, always route to the medical vision agents.
+    - If the user has not uploaded any image, always route to the conversation agent.
+    - If the user uploads a medical image, decide which medical vision agent is appropriate based on the image type and the user's query. If the image is uploaded without a query, always route to the correct medical vision agent based on the image type.
     - If the user asks about recent medical developments or current health situations, use the web search pocessor agent.
     - If the user asks specific medical knowledge questions, use the RAG agent.
     - For general conversation, greetings, or non-medical questions, use the conversation agent. But if image is uploaded, always go to the medical vision agents first.
@@ -125,7 +126,8 @@ def create_agent_graph():
         # Check if input contains an image
         if isinstance(current_input, dict) and "image" in current_input:
             has_image = True
-            image_type_response = AgentConfig.image_analyzer.process_image(current_input.get("image", None))
+            image_path = current_input.get("image", None)
+            image_type_response = AgentConfig.image_analyzer.analyze_image(image_path)
             image_type = image_type_response['image_type']
             print("ANALYZED IMAGE TYPE: ", image_type)
         
@@ -194,7 +196,83 @@ def create_agent_graph():
 
         print(f"Selected agent: CONVERSATION_AGENT")
 
-        response = AIMessage(content="This would be handled by the conversation agent.")
+        messages = state["messages"]
+        current_input = state["current_input"]
+        
+        # Prepare input for decision model
+        input_text = ""
+        if isinstance(current_input, str):
+            input_text = current_input
+        elif isinstance(current_input, dict):
+            input_text = current_input.get("text", "")
+        
+        # Create context from recent conversation history (last 3 messages)
+        recent_context = ""
+        for msg in messages[-6:]:  # Get last 3 exchanges (6 messages)
+            if isinstance(msg, HumanMessage):
+                recent_context += f"User: {msg.content}\n"
+            elif isinstance(msg, AIMessage):
+                recent_context += f"Assistant: {msg.content}\n"
+        
+        # Combine everything for the decision input
+        conversation_prompt = f"""User query: {input_text}
+
+        Recent conversation context: {recent_context}
+
+        You are an AI-powered Medical Conversation Assistant. Your goal is to facilitate smooth and informative conversations with users, handling both casual and medical-related queries. You must respond naturally while ensuring medical accuracy and clarity.
+
+        ### Role & Capabilities
+        - Engage in **general conversation** while maintaining professionalism.
+        - Answer **medical questions** using verified knowledge.
+        - Route **complex queries** to RAG (retrieval-augmented generation) or web search if needed.
+        - Handle **follow-up questions** while keeping track of conversation context.
+        - Redirect **medical images** to the appropriate AI analysis agent.
+
+        ### Guidelines for Responding:
+        1. **General Conversations:**
+        - If the user engages in casual talk (e.g., greetings, small talk), respond in a friendly, engaging manner.
+        - Keep responses **concise and engaging**, unless a detailed answer is needed.
+
+        2. **Medical Questions:**
+        - If you have **high confidence** in answering, provide a medically accurate response.
+        - Ensure responses are **clear, concise, and factual**.
+
+        3. **Follow-Up & Clarifications:**
+        - Maintain conversation history for better responses.
+        - If a query is unclear, ask **follow-up questions** before answering.
+
+        4. **Handling Medical Image Analysis:**
+        - Do **not** attempt to analyze images yourself.
+        - If user speaks about analyzing or processing or detecting or segmenting or classifying any disease from any image, ask the user to upload the image so that in the next turn it is routed to the appropriate medical vision agents.
+        - If an image was uploaded, it would have been routed to the medical computer vision agents. Read the history to know about the diagnosis results and continue conversation if user asks anything regarding the diagnosis.
+        - After processing, **help the user interpret the results**.
+
+        5. **Uncertainty & Ethical Considerations:**
+        - If unsure, **never assume** medical facts.
+        - Recommend consulting a **licensed healthcare professional** for serious medical concerns.
+        - Avoid providing **medical diagnoses** or **prescriptions**—stick to general knowledge.
+
+        ### Response Format:
+        - Maintain a **conversational yet professional tone**.
+        - Use **bullet points or numbered lists** for clarity when needed.
+        - If pulling from external sources (RAG/Web Search), mention **where the information is from** (e.g., "According to Mayo Clinic...").
+        - If a user asks for a diagnosis, remind them to **seek medical consultation**.
+
+        ### Example User Queries & Responses:
+
+        **User:** "Hey, how's your day going?"
+        **You:** "I'm here and ready to help! How can I assist you today?"
+
+        **User:** "I have a headache and fever. What should I do?"
+        **You:** "I'm not a doctor, but headaches and fever can have various causes, from infections to dehydration. If your symptoms persist, you should see a medical professional."
+
+        Conversational LLM Response:"""
+
+        response = AgentConfig.llm.invoke(conversation_prompt)
+
+        print("########### DEBUGGING #########: reponse from conversation agent llm:", response)
+
+        # response = AIMessage(content="This would be handled by the conversation agent.")
 
         return {
             **state,
@@ -289,9 +367,22 @@ def create_agent_graph():
     def run_chest_xray_agent(state: AgentState) -> AgentState:
         """Handle chest X-ray image analysis."""
 
+        current_input = state["current_input"]
+        image_path = current_input.get("image", None)
+
         print(f"Selected agent: CHEST_XRAY_AGENT")
 
-        response = AIMessage(content="This would be handled by the chest X-ray agent, analyzing the image.")
+        # classify chest x-ray into covid or normal
+        predicted_class = AgentConfig.image_analyzer.classify_chest_xray(image_path)
+
+        if predicted_class == "covid19":
+            response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a *POSITIVE* result for *COVID-19*.")
+        elif predicted_class == "normal":
+            response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a *NEGATIVE* result for *COVID-19*, i.e., *NORMAL*.")
+        else:
+            response = AIMessage(content="The uploaded chest X-ray image is not clear enough to make a diagnosis / the image is not a chest X-ray image.")
+
+        # response = AIMessage(content="This would be handled by the chest X-ray agent, analyzing the image.")
 
         return {
             **state,
