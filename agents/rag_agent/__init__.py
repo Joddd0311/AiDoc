@@ -1,255 +1,100 @@
-import logging
-import time
-from typing import List, Dict, Any, Optional
 import os
-from pathlib import Path
-# from sentence_transformers import SentenceTransformer
+import time
+import logging
+from typing import List, Optional, Dict, Any
 
-from .vector_store import QdrantRetriever
-from .document_processor import MedicalDocumentProcessor
-from .query_processor import QueryProcessor
+from .doc_parser import MedicalDocParser
+from .content_processor import ContentProcessor
+from .vectorstore_qdrant import VectorStore
 from .reranker import Reranker
+from .query_expander import QueryExpander
 from .response_generator import ResponseGenerator
-from .data_ingestion import MedicalDataIngestion
-# from .evaluation import RAGEvaluator
 
 class MedicalRAG:
     """
     Medical Retrieval-Augmented Generation system that integrates all components.
     """
-    def __init__(self, config, llm, embedding_model = None):
+    def __init__(self, config):
         """
-        Initialize the Medical RAG system.
+        Initialize the RAG Agent.
         
         Args:
-            config: Configuration object
-            llm: Language model for response generation
+            config: Configuration object with RAG settings
         """
-        self.logger = logging.getLogger(__name__)
+        # Set up logging
+        self.logger = logging.getLogger(f"{self.__module__}")
+        self.logger.info("Initializing Medical RAG system")
         self.config = config
-        self.llm = llm
-        
-        # Initialize embedding model
-        self.logger.info(f"Loading embedding model: {config.rag.embedding_model}")
-        # self.embedding_model = SentenceTransformer(config.rag.embedding_model, use_auth_token=config.rag.huggingface_token)
-        self.embedding_model = embedding_model
-        
-        # Initialize components
-        self.retriever = QdrantRetriever(config)
-        self.document_processor = MedicalDocumentProcessor(config, self.embedding_model)
-        self.query_processor = QueryProcessor(config, self.embedding_model)
+        self.doc_parser = MedicalDocParser()
+        self.content_processor = ContentProcessor(config)
+        self.vector_store = VectorStore(config)
         self.reranker = Reranker(config)
-        self.response_generator = ResponseGenerator(config, llm)
-        self.data_ingestion = MedicalDataIngestion(config_path=getattr(config, 'data_ingestion_config_path', None))
-        # self.evaluator = RAGEvaluator(config)
-        
-        self.logger.info("Medical RAG system initialized successfully")
-
-    def process_query(self, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
-        """
-        Process a user query and generate a response.
-        """
-        start_time = time.time()
-
-        self.logger.info(f"Processing query: {query}")
-        
-        try:
-            # Process query
-            query_vector, filters = self.query_processor.process_query(query)
-
-            # print("####### PRINTED from rag_agent/__init__.py: query_vector:", query_vector)
-            
-            # Temporarily disable filters until your documents have proper metadata
-            filters = {}  # Comment this line out once you have documents with proper metadata
-            
-            # Retrieve documents
-            retrieval_start = time.time()
-            retrieved_docs = self.retriever.retrieve(query_vector, filters)
-            retrieval_time = time.time() - retrieval_start
-            
-            # print("####### PRINTED from rag_agent/__init__.py: retrieved_docs:", retrieved_docs)
-
-            # Debug output
-            self.logger.info(f"Retrieved {len(retrieved_docs)} documents")
-            for i, doc in enumerate(retrieved_docs[:3]):  # Log first 3 docs
-                self.logger.info(f"Doc {i}: Score {doc['score']}, Content: {doc['content'][:100]}...")
-            
-            # Rest of your code remains the same
-            if retrieved_docs:
-                reranked_docs = self.reranker.rerank(query, retrieved_docs)
-            else:
-                reranked_docs = []
-            
-            response_start = time.time()
-            response = self.response_generator.generate_response(query, reranked_docs, chat_history)
-            response_time = time.time() - response_start
-            
-            response["processing_time"] = time.time() - start_time
-            response["num_docs_retrieved"] = len(retrieved_docs)  # Add this for debugging
-            
-            return response
-            
-        except Exception as e:
-            self.logger.error(f"Error processing query: {e}")
-            return {
-                "response": "I apologize, but I encountered an error while processing your query. Please try again or rephrase your question.",
-                "sources": [],
-                "confidence": 0.0,
-                "processing_time": time.time() - start_time
-            }
+        self.query_expander = QueryExpander(config)
+        self.response_generator = ResponseGenerator(config)
+        self.parsed_content_dir = self.config.rag.parsed_content_dir
     
-    def ingest_documents(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Ingest documents into the RAG system.
-        
-        Args:
-            documents: List of dictionaries with 'content' and 'metadata' keys
-            
-        Returns:
-            Dictionary with ingestion results
-        """
-        start_time = time.time()
-        self.logger.info(f"Ingesting {len(documents)} documents")
-        
-        try:
-            # Process documents
-            processed_docs = []
-            for doc in documents:
-                chunks = self.document_processor.process_document(doc["content"], doc["metadata"])
-                processed_docs.extend(chunks)
-            
-            # Generate embeddings
-            embedding_start = time.time()
-            chunk_texts = [chunk["content"] for chunk in processed_docs]
-            embeddings = self.embedding_model.embed_documents(chunk_texts)
-            embedding_time = time.time() - embedding_start
-            
-            # Add embeddings to processed documents
-            for i, chunk in enumerate(processed_docs):
-                chunk["embedding"] = embeddings[i]#.tolist()
-            
-            # Store documents in vector database
-            storage_start = time.time()
-            insertion_result = self.retriever.upsert_documents(processed_docs)
-            storage_time = time.time() - storage_start
-            
-            # Log metrics
-            metrics = {
-                "documents_ingested": len(documents),
-                "chunks_created": len(processed_docs),
-                "embedding_time": embedding_time,
-                "storage_time": storage_time,
-                "total_processing_time": time.time() - start_time
-            }
-            
-            return {
-                "success": True,
-                "metrics": metrics,
-                "insertion_details": insertion_result
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error ingesting documents: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
-    
-    def ingest_file(self, file_path: str) -> Dict[str, Any]:
-        """
-        Ingest a single file into the RAG system.
-        
-        Args:
-            file_path: Path to the file to ingest
-            
-        Returns:
-            Dictionary with ingestion results
-        """
-        start_time = time.time()
-        self.logger.info(f"Ingesting file: {file_path}")
-        
-        try:
-            # Use the data ingestion component to process the file
-            ingestion_result = self.data_ingestion.ingest_file(file_path)
-            
-            if not ingestion_result["success"]:
-                return {
-                    "success": False,
-                    "error": ingestion_result.get("error", "Unknown error during file ingestion"),
-                    "processing_time": time.time() - start_time
-                }
-            
-            # Prepare documents for ingestion
-            documents = []
-            if "document" in ingestion_result:
-                documents = [ingestion_result["document"]]
-            elif "documents" in ingestion_result:
-                documents = ingestion_result["documents"]
-            
-            # Ingest the documents
-            if documents:
-                return self.ingest_documents(documents)
-            else:
-                return {
-                    "success": False,
-                    "error": "No valid documents found in file",
-                    "processing_time": time.time() - start_time
-                }
-            
-        except Exception as e:
-            self.logger.error(f"Error ingesting file: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
-    
-    def ingest_directory(self, directory_path: str, file_extension: Optional[str] = None) -> Dict[str, Any]:
+    def ingest_directory(self, directory_path: str) -> Dict[str, Any]:
         """
         Ingest all files in a directory into the RAG system.
         
         Args:
-            directory_path: Path to the directory containing files
-            file_extension: Optional file extension filter (e.g., ".txt", ".pdf")
+            directory_path: Path to the directory containing files to ingest
             
         Returns:
             Dictionary with ingestion results
         """
         start_time = time.time()
-        self.logger.info(f"Ingesting directory: {directory_path}")
+        self.logger.info(f"Ingesting files from directory: {directory_path}")
         
         try:
-            # Use the data ingestion component to process all files in the directory
-            directory_results = self.data_ingestion.ingest_directory(directory_path, file_extension)
+            # Check if directory exists
+            if not os.path.isdir(directory_path):
+                raise ValueError(f"Directory not found: {directory_path}")
             
-            # Collect all documents from the ingestion results
-            all_documents = []
-            for file_path in Path(directory_path).glob(f"*{file_extension or ''}"):
-                try:
-                    ingestion_result = self.data_ingestion.ingest_file(str(file_path))
-                    if ingestion_result["success"]:
-                        if "document" in ingestion_result:
-                            all_documents.append(ingestion_result["document"])
-                        elif "documents" in ingestion_result:
-                            all_documents.extend(ingestion_result["documents"])
-                except Exception as e:
-                    self.logger.error(f"Error processing file {file_path}: {e}")
+            # Get all files in the directory
+            files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) 
+                     if os.path.isfile(os.path.join(directory_path, f))]
             
-            # Ingest all collected documents
-            if all_documents:
-                ingestion_result = self.ingest_documents(all_documents)
-                ingestion_result["files_processed"] = directory_results["files_processed"]
-                ingestion_result["errors"] = directory_results["errors"]
-                return ingestion_result
-            else:
+            if not files:
+                self.logger.warning(f"No files found in directory: {directory_path}")
                 return {
-                    "success": False,
-                    "error": "No valid documents found in directory",
-                    "files_processed": directory_results["files_processed"],
-                    "errors": directory_results["errors"],
+                    "success": True,
+                    "documents_ingested": 0,
+                    "chunks_processed": 0,
                     "processing_time": time.time() - start_time
                 }
+            
+            # Track statistics
+            total_chunks_processed = 0
+            successful_ingestions = 0
+            failed_ingestions = 0
+            failed_files = []
+            
+            # Process each file
+            for file_path in files:
+                self.logger.info(f"Processing file {successful_ingestions + failed_ingestions + 1}/{len(files)}: {file_path}")
+                
+                try:
+                    result = self.ingest_file(file_path)
+                    if result["success"]:
+                        successful_ingestions += 1
+                        total_chunks_processed += result.get("chunks_processed", 0)
+                    else:
+                        failed_ingestions += 1
+                        failed_files.append({"file": file_path, "error": result.get("error", "Unknown error")})
+                except Exception as e:
+                    self.logger.error(f"Error processing file {file_path}: {e}")
+                    failed_ingestions += 1
+                    failed_files.append({"file": file_path, "error": str(e)})
+            
+            return {
+                "success": True,
+                "documents_ingested": successful_ingestions,
+                "failed_documents": failed_ingestions,
+                "failed_files": failed_files,
+                "chunks_processed": total_chunks_processed,
+                "processing_time": time.time() - start_time
+            }
             
         except Exception as e:
             self.logger.error(f"Error ingesting directory: {e}")
@@ -259,327 +104,129 @@ class MedicalRAG:
                 "processing_time": time.time() - start_time
             }
     
-    def refresh_collection(self) -> Dict[str, Any]:
+    def ingest_file(self, document_path: str) -> Dict[str, Any]:
         """
-        Refresh the vector database collection (e.g., optimize, update search index).
-        
-        Returns:
-            Dictionary with refresh operation results
-        """
-        start_time = time.time()
-        self.logger.info("Refreshing vector database collection")
-        
-        try:
-            refresh_result = self.retriever.refresh_collection()
-            
-            return {
-                "success": True,
-                "details": refresh_result,
-                "processing_time": time.time() - start_time
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error refreshing collection: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
-    
-    def get_collection_stats(self) -> Dict[str, Any]:
-        """
-        Get statistics about the current vector database collection.
-        
-        Returns:
-            Dictionary with collection statistics
-        """
-        try:
-            stats = self.retriever.get_collection_stats()
-            return {
-                "success": True,
-                "stats": stats
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error getting collection stats: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    def tune_retrieval_parameters(self, queries: List[str], expected_docs: List[List[Dict[str, Any]]]) -> Dict[str, Any]:
-        """
-        Tune the retrieval parameters based on a set of test queries and expected results.
+        Ingest a single file into the RAG system.
         
         Args:
-            queries: List of test queries
-            expected_docs: List of lists of expected documents for each query
+            document_path: Path to the file to ingest
             
         Returns:
-            Dictionary with tuning results and optimized parameters
+            Dictionary with ingestion results
         """
         start_time = time.time()
-        self.logger.info(f"Tuning retrieval parameters with {len(queries)} test queries")
-        
-        try:
-            # Initial evaluation
-            initial_scores = []
-            for i, query in enumerate(queries):
-                query_vector, _ = self.query_processor.process_query(query)
-                retrieved_docs = self.retriever.retrieve(query_vector)
-                # score = self.evaluator.evaluate_retrieval(retrieved_docs, expected_docs[i])
-                score = 0  # Placeholder for commented code
-                initial_scores.append(score)
-            
-            initial_avg_score = sum(initial_scores) / len(initial_scores)
-            
-            # Parameter combinations to test
-            param_combinations = [
-                {"top_k": 5, "mmr_lambda": 0.7},
-                {"top_k": 10, "mmr_lambda": 0.7},
-                {"top_k": 5, "mmr_lambda": 0.5},
-                {"top_k": 10, "mmr_lambda": 0.5}
-            ]
-            
-            best_params = None
-            best_score = initial_avg_score
-            
-            # Test each parameter combination
-            for params in param_combinations:
-                scores = []
-                for i, query in enumerate(queries):
-                    query_vector, _ = self.query_processor.process_query(query)
-                    retrieved_docs = self.retriever.retrieve(
-                        query_vector, 
-                        top_k=params["top_k"],
-                        mmr_lambda=params["mmr_lambda"]
-                    )
-                    # score = self.evaluator.evaluate_retrieval(retrieved_docs, expected_docs[i])
-                    score = 0  # Placeholder for commented code
-                    scores.append(score)
-                
-                avg_score = sum(scores) / len(scores)
-                
-                if avg_score > best_score:
-                    best_score = avg_score
-                    best_params = params
-            
-            # Update config if better parameters were found
-            if best_params and best_score > initial_avg_score:
-                self.config.rag.retrieval.top_k = best_params["top_k"]
-                self.config.rag.retrieval.mmr_lambda = best_params["mmr_lambda"]
-                self.logger.info(f"Updated retrieval parameters: {best_params}")
-            
-            return {
-                "success": True,
-                "initial_score": initial_avg_score,
-                "best_score": best_score,
-                "best_parameters": best_params or "No improvement found",
-                "processing_time": time.time() - start_time
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error tuning retrieval parameters: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "processing_time": time.time() - start_time
-            }
-    
-    def clear_collection(self) -> Dict[str, Any]:
-        """
-        Clear all documents from the vector database collection.
-        
-        Returns:
-            Dictionary with operation results
-        """
-        start_time = time.time()
-        self.logger.info("Clearing vector database collection")
-        
-        try:
-            clear_result = self.retriever.clear_collection()
-            
-            return {
-                "success": True,
-                "details": clear_result,
-                "processing_time": time.time() - start_time
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Error clearing collection: {e}")
+        self.logger.info(f"Ingesting file: {document_path}")
 
-        return {
-            "success": False,
-            "error": str(e),
-            "processing_time": time.time() - start_time
-        }
-
-    def process_ingested_data(self, process_type: str = "batch", **kwargs) -> Dict[str, Any]:
-        """
-        Process ingested data with various processing options.
-        
-        Args:
-            process_type: Type of processing ('batch', 'incremental', 'priority')
-            **kwargs: Additional parameters specific to the processing type
-            
-        Returns:
-            Dictionary with processing results
-        """
-        start_time = time.time()
-        self.logger.info(f"Processing ingested data with method: {process_type}")
-        
         try:
-            if process_type == "batch":
-                # Batch processing of all pending documents
-                batch_size = kwargs.get("batch_size", 100)
-                
-                # In a real implementation, you would fetch pending documents from a queue
-                # For now, we'll assume the documents are passed in kwargs
-                documents = kwargs.get("documents", [])
-                
-                if not documents:
-                    return {
-                        "success": True,
-                        "message": "No documents to process",
-                        "processing_time": time.time() - start_time
-                    }
-                
-                # Process in batches
-                total_processed = 0
-                for i in range(0, len(documents), batch_size):
-                    batch = documents[i:i+batch_size]
-                    result = self.ingest_documents(batch)
-                    if result["success"]:
-                        total_processed += len(batch)
-                
-                return {
-                    "success": True,
-                    "documents_processed": total_processed,
-                    "total_documents": len(documents),
-                    "processing_time": time.time() - start_time
-                }
-                
-            elif process_type == "incremental":
-                # Process only new or modified documents
-                last_update = kwargs.get("last_update", None)
-                directory = kwargs.get("directory", None)
-                
-                if not directory:
-                    return {
-                        "success": False,
-                        "error": "Directory required for incremental processing",
-                        "processing_time": time.time() - start_time
-                    }
-                
-                # Get modified files since last update
-                new_or_modified_files = []
-                if last_update:
-                    for file_path in Path(directory).rglob("*"):
-                        if file_path.is_file() and file_path.stat().st_mtime > last_update:
-                            new_or_modified_files.append(str(file_path))
-                else:
-                    # If no last_update provided, treat all files as new
-                    new_or_modified_files = [str(file_path) for file_path in Path(directory).rglob("*") if file_path.is_file()]
-                
-                # Process each file
-                successful_files = 0
-                for file_path in new_or_modified_files:
-                    result = self.ingest_file(file_path)
-                    if result["success"]:
-                        successful_files += 1
-                
-                return {
-                    "success": True,
-                    "files_processed": successful_files,
-                    "total_files": len(new_or_modified_files),
-                    "processing_time": time.time() - start_time
-                }
-                
-            elif process_type == "priority":
-                # Process high-priority documents first
-                priority_files = kwargs.get("priority_files", [])
-                
-                if not priority_files:
-                    return {
-                        "success": False,
-                        "error": "No priority files specified",
-                        "processing_time": time.time() - start_time
-                    }
-                
-                # Process each priority file
-                successful_files = 0
-                for file_path in priority_files:
-                    result = self.ingest_file(file_path)
-                    if result["success"]:
-                        successful_files += 1
-                
-                return {
-                    "success": True,
-                    "files_processed": successful_files,
-                    "total_files": len(priority_files),
-                    "processing_time": time.time() - start_time
-                }
-                
-            else:
-                return {
-                    "success": False,
-                    "error": f"Unknown processing type: {process_type}",
-                    "processing_time": time.time() - start_time
-                }
-                
+            # Step 1: Parse document
+            self.logger.info("1. Parsing document and extracting images...")
+            parsed_document, images = self.doc_parser.parse_document(document_path, self.parsed_content_dir)
+            self.logger.info(f"   Parsed document and extracted {len(images)} images")
+
+            # Step 2: Summarize images
+            self.logger.info("2. Summarizing images...")
+            image_summaries = self.content_processor.summarize_images(images)
+            self.logger.info(f"   Generated {len(image_summaries)} image summaries")
+
+            # Step 3: Format document with image summaries
+            self.logger.info("3. Formatting document with image summaries...")
+            formatted_document = self.content_processor.format_document_with_images(parsed_document, image_summaries)
+
+            # Step 4: Chunk document into semantic sections
+            self.logger.info("4. Chunking document into semantic sections...")
+            document_chunks = self.content_processor.chunk_document(formatted_document)
+            self.logger.info(f"   Document split into {len(document_chunks)} chunks")
+
+            # Step 5: Create vector store and document store
+            self.logger.info("5. Creating vector store knowledge base...")
+            self.vector_store.create_vectorstore(
+                document_chunks=document_chunks, 
+                document_path=document_path
+                )
+            
+            return {
+                "success": True,
+                "documents_ingested": 1,
+                "chunks_processed": len(document_chunks),
+                "processing_time": time.time() - start_time
+            }
+        
         except Exception as e:
-            self.logger.error(f"Error processing ingested data: {e}")
+            self.logger.error(f"Error ingesting file: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "processing_time": time.time() - start_time
             }
-    
-    def analyze_source_quality(self, document_ids: List[str] = None) -> Dict[str, Any]:
+        
+    def process_query(self, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
-        Analyze the quality of ingested sources based on various metrics.
+        Process a query with the RAG system.
         
         Args:
-            document_ids: Optional list of document IDs to analyze
+            query: The query string
+            chat_history: Optional chat history for context
             
         Returns:
-            Dictionary with quality analysis results
+            Response dictionary
         """
         start_time = time.time()
-        self.logger.info("Analyzing source quality")
+        self.logger.info(f"RAG Agent processing query: {query}")
         
+        # Process query and return result, passing chat_history
         try:
-            # Get statistics about the collection or specific documents
-            if document_ids:
-                # In a real implementation, fetch specific documents
-                return {
-                    "success": True,
-                    "message": f"Quality analysis for {len(document_ids)} documents not implemented",
-                    "processing_time": time.time() - start_time
-                }
+            # Step 1: Expand query
+            self.logger.info(f"1. Expanding query: '{query}'")
+            expansion_result = self.query_expander.expand_query(query)
+            expanded_query = expansion_result["expanded_query"]
+            self.logger.info(f"   Original: '{query}'")
+            self.logger.info(f"   Expanded: '{expanded_query}'")
+            query = expanded_query
+
+            # Step 2: Retrieval
+            self.logger.info(f"2. Retrieving relevant documents for the query: '{query}'")
+            vectorstore, docstore = self.vector_store.load_vectorstore()
+            retrieved_documents = self.vector_store.retrieve_relevant_chunks(
+                query=query,
+                vectorstore=vectorstore,
+                docstore=docstore,
+                )
+
+            self.logger.info(f"   Retrieved {len(retrieved_documents)} relevant document chunks")
+
+            # Step 3: Rerank the retrieved documents if we have a reranker and enough documents
+            self.logger.info(f"3. Reranking the retrieved documents")
+            if self.reranker and len(retrieved_documents) > 1:
+                reranked_documents, reranked_top_k_picture_paths = self.reranker.rerank(query, retrieved_documents, self.parsed_content_dir)
+                self.logger.info(f"   Reranked retrieved documents and chose top {len(reranked_documents)}")
+                self.logger.info(f"   Found {len(reranked_top_k_picture_paths)} referenced images")
             else:
-                # Get overall collection statistics
-                stats = self.get_collection_stats()
-                
-                # In a real implementation, you would analyze these stats
-                # For now, we'll return a placeholder
-                
-                return {
-                    "success": True,
-                    "collection_stats": stats.get("stats", {}),
-                    "quality_metrics": {
-                        "source_diversity": 0.85,  # Placeholder value
-                        "content_freshness": 0.92,  # Placeholder value
-                        "information_density": 0.78,  # Placeholder value
-                        "content_specificity": 0.81   # Placeholder value
-                    },
-                    "processing_time": time.time() - start_time
-                }
-                
+                self.logger.info(f"   Could not rerank the retrieved documents, falling back to original scores")
+                reranked_documents = retrieved_documents
+                reranked_top_k_picture_paths = []
+
+            # Step 4: Generate response
+            self.logger.info("4. Generating response...")
+            response = self.response_generator.generate_response(
+                query=query,
+                retrieved_docs=reranked_documents,
+                picture_paths=reranked_top_k_picture_paths
+                )
+            
+            # Add timing information
+            processing_time = time.time() - start_time
+            response["processing_time"] = processing_time
+            
+            return response
+        
         except Exception as e:
-            self.logger.error(f"Error analyzing source quality: {e}")
+            self.logger.error(f"Error processing query: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            # Return error response
             return {
-                "success": False,
-                "error": str(e),
+                "response": f"I encountered an error while processing your query: {str(e)}",
+                "sources": [],
+                "confidence": 0.0,
                 "processing_time": time.time() - start_time
             }
