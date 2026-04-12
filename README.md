@@ -9,9 +9,9 @@
 ![LangGraph - Version](https://img.shields.io/badge/LangGraph-0.3+-teal?style=for-the-badge&logo=langgraph)
 ![LangChain - Version](https://img.shields.io/badge/LangChain-0.3+-teal?style=for-the-badge&logo=langchain)
 ![Qdrant Client - Version](https://img.shields.io/badge/Qdrant-1.13+-red?style=for-the-badge&logo=qdrant)
-![Pydantic - Version](https://img.shields.io/badge/Pydantic-2.10+-red?style=for-the-badge&logo=pydantic)
 ![FastAPI - Version](https://img.shields.io/badge/FastAPI-0.115+-teal?style=for-the-badge&logo=fastapi)
-![Docling - Version](https://img.shields.io/badge/Docling-3.1+-orange?style=for-the-badge&logo=docling)
+![Pydantic - Version](https://img.shields.io/badge/Pydantic-2.10+-red?style=for-the-badge&logo=pydantic)
+![Flask - Version](https://img.shields.io/badge/Flask-3.1+-blue?style=for-the-badge&logo=flask)
 [![Generic badge](https://img.shields.io/badge/License-Apache-<COLOR>.svg?style=for-the-badge)](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant/blob/main/LICENSE) 
 [![GitHub Issues](https://img.shields.io/github/issues/souvikmajumder26/Multi-Agent-Medical-Assistant.svg?style=for-the-badge)](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant/issues)
 ![Contributions welcome](https://img.shields.io/badge/contributions-welcome-orange.svg?style=for-the-badge)
@@ -25,7 +25,7 @@
 > 1. **Document Processing Upgrade**: Unstructured.io has been replaced with Docling for document parsing and extraction of text, tables, and images to be embedded.
 > 2. **Enhanced RAG References**: Links to source documents and reference images present in reranked retrieved chunks stored in local storage are added to the bottom of the RAG responses.
 >
-> To use Unstructured.io based solution, refer release - [v2.0](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant/tree/v2.0).
+> To use Unstructured.io based solution, refer release - v2.0.
  
 ## 📚 Table of Contents
 - [Overview](#overview)
@@ -109,23 +109,21 @@ If you like what you see and would want to support the project's developer, you 
 🔹 **Vector Database**: Qdrant (for retrieval-augmented generation) 🔍  
 🔹 **Medical Image Analysis**: Computer vision models (Brain Tumor - Semantic Segmentation, Chest X-ray - Object Detection, Skin Lesion - Classification) 🏥  
 🔹 **Speech Processing**: Eleven Labs API 🎙️  
-🔹 **UI**: HTML, CSS, JS 🌐  
+🔹 **UI**: HTML, CSS, JS, Flask 🌐  
 🔹 **Deployment**: Docker 🛠️   -->
 
 ## ✨ Key Features  <a name="key-features"></a>
 
 - 🤖 **Multi-Agent Architecture** : Specialized agents working in harmony to handle diagnosis, information retrieval, reasoning, and more
 
-- 🔍 **Advanced Agentic RAG Retrieval System** :
+- 🔍 **Advanced RAG Retrieval System** :
 
   - Docling based parsing to extract text, tables, and images from PDFs.
   - Embedding markdown formatted text, tables and LLM based image summaries.
   - LLM based semantic chunking with structural boundary awareness.
   - LLM based query expansion with related medical domain terms.
   - Qdrant hybrid search combining BM25 sparse keyword search along with dense embedding vector search.
-  - HuggingFace Cross-Encoder based reranking of retrieved document chunks for accurate LLM reponses.
   - Input-output guardrails to ensure safe and relevant responses.
-  - Links to source documents and images present in reference document chunks provided with reponse.
   - Confidence-based agent-to-agent handoff between RAG and Web Search to prevent hallucinations.
 
 - 🏥 **Medical Imaging Analysis**  
@@ -156,9 +154,8 @@ If you like what you see and would want to support the project's developer, you 
 
 | Component | Technologies |
 |-----------|-------------|
-| 🔹 **Backend Framework** | FastAPI |
+| 🔹 **Backend Framework** | FastAPI, Flask |
 | 🔹 **Agent Orchestration** | LangGraph |
-| 🔹 **Document Parsing** | Docling |
 | 🔹 **Knowledge Storage** | Qdrant Vector Database |
 | 🔹 **Medical Imaging** | Computer Vision Models |
 | | • Brain Tumor: Object Detection (PyTorch) |
@@ -167,7 +164,7 @@ If you like what you see and would want to support the project's developer, you 
 | 🔹 **Guardrails** | LangChain |
 | 🔹 **Speech Processing** | Eleven Labs API |
 | 🔹 **Frontend** | HTML, CSS, JavaScript |
-| 🔹 **Deployment** | Docker, GitHub Actions CI/CD |
+| 🔹 **Deployment** | Docker, CI/CD Pipeline |
 
 ---
 
@@ -197,37 +194,36 @@ cd Multi-Agent-Medical-Assistant
 
 > [!WARNING]  
 > Ensure the API keys in the `.env` file are correct and have the necessary permissions.
-> No trailing whitespaces after variable names.
 
 ```bash
 # LLM Configuration (Azure Open AI - gpt-4o used in development)
 # If using any other LLM API key or local LLM, appropriate code modification is required
-deployment_name= 
-model_name=gpt-4o
-azure_endpoint=
-openai_api_key=
-openai_api_version=
+deployment_name = 
+model_name = gpt-4o
+azure_endpoint = 
+openai_api_key = 
+openai_api_version = 
 
 # Embedding Model Configuration (Azure Open AI - text-embedding-ada-002 used in development)
 # If using any other embedding model, appropriate code modification is required
-embedding_deployment_name=
-embedding_model_name=text-embedding-ada-002
-embedding_azure_endpoint=
-embedding_openai_api_key=
-embedding_openai_api_version=
+embedding_deployment_name =
+embedding_model_name = text-embedding-ada-002
+embedding_azure_endpoint = 
+embedding_openai_api_key = 
+embedding_openai_api_version = 
 
 # Speech API Key (Free credits available with new Eleven Labs Account)
-ELEVEN_LABS_API_KEY=
+ELEVEN_LABS_API_KEY = 
 
 # Web Search API Key (Free credits available with new Tavily Account)
-TAVILY_API_KEY=
+TAVILY_API_KEY = 
 
 # Hugging Face Token - using reranker model "ms-marco-TinyBERT-L-6"
-HUGGINGFACE_TOKEN=
+HUGGINGFACE_TOKEN = 
 
 # (OPTIONAL) If using Qdrant server version, local does not require API key
-QDRANT_URL=
-QDRANT_API_KEY=
+QDRANT_URL = 
+QDRANT_API_KEY = 
 ```
 
 ### 3️⃣ Build the Docker Image
@@ -237,9 +233,15 @@ docker build -t medical-assistant .
 
 ### 4️⃣ Run the Docker Container
 ```bash
-docker run -d --name medical-assistant-app -p 8000:8000 --env-file .env medical-assistant
+docker run -d \
+  --name medical-assistant-app \
+  -p 8000:8000 \
+  --env-file .env \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/uploads:/app/uploads \
+  medical-assistant
 ```
-The application will be available at: [http://localhost:8000](http://localhost:8000)
+The application will be available at: `http://localhost:8000`
 
 ### 5️⃣ Ingest Data into Vector DB from Docker Container
 
@@ -290,7 +292,7 @@ docker logs medical-assistant-app
 ```
 
 
-## 📌 Option 2: Without Using Docker  <a name="manual-setup"></a>
+## 📌 Option 2: Manual Installation  <a name="manual-setup"></a>
 
 ### 1️⃣ Clone the Repository  
 ```bash  
@@ -340,7 +342,7 @@ pip install -r requirements.txt
 ```bash
 python app.py
 ```
-The application will be available at: [http://localhost:8000](http://localhost:8000)
+The application will be available at: `http://localhost:8000`
 
 ### 6️⃣ Ingest additional data into the Vector DB
 Run any one of the following commands as required.
